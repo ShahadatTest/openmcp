@@ -1,27 +1,43 @@
 import { z } from "zod";
 
+import {
+  ActivityBucket,
+  ActivityEntry,
+  ActivityQuery,
+  ActivityScope,
+  ActivitySummary,
+  ActivitySummaryQuery
+} from "./activity";
 import { AvailableUpdate, CatalogEntry, CatalogInstall, CatalogResults, CatalogSearch, CatalogUpdate } from "./catalog";
-import { ActivityEntry, ActivityQuery, ActivityScope, ActivitySummary } from "./activity";
+import { LogLine, ServerCounts, ServerDetails, ServerState } from "./runtime";
 import { InstalledServer, NewCustomServer, ServerUpdate } from "./server";
 import { GatewayConnection, GatewayPort, GatewayState } from "./gateway";
-import { LogLine, ServerDetails, ServerState } from "./runtime";
+import { Appearance, AppPage, UpdateState } from "./app";
 import { ClientId, ClientState } from "./clients";
+import { Runtimes } from "./system";
 
 const ServerId = z.object({ id: z.uuid() });
 const ClientTarget = z.object({ id: ClientId });
 
 export const ipc = {
   "app:version": { input: z.void(), output: z.string() },
+  "app:appearance": { input: z.void(), output: Appearance },
+  "app:setAppearance": { input: Appearance, output: z.void() },
+
+  "updater:state": { input: z.void(), output: UpdateState },
+  "updater:install": { input: z.void(), output: z.void() },
 
   "servers:list": { input: z.void(), output: z.array(InstalledServer) },
   "servers:addCustom": { input: NewCustomServer, output: InstalledServer },
   "servers:update": { input: ServerUpdate, output: InstalledServer },
   "servers:remove": { input: ServerId, output: z.void() },
+  "servers:setAutostart": { input: ServerId.extend({ autostart: z.boolean() }), output: z.void() },
 
   "servers:start": { input: ServerId, output: z.void() },
   "servers:stop": { input: ServerId, output: z.void() },
   "servers:restart": { input: ServerId, output: z.void() },
   "servers:states": { input: z.void(), output: z.array(ServerState) },
+  "servers:counts": { input: z.void(), output: z.array(ServerCounts) },
   "servers:logs": { input: ServerId, output: z.array(LogLine) },
   "servers:details": { input: ServerId, output: ServerDetails },
   "servers:signIn": { input: ServerId, output: z.void() },
@@ -39,12 +55,15 @@ export const ipc = {
   "gateway:setPort": { input: z.object({ port: GatewayPort }), output: z.void() },
   "gateway:regenerateToken": { input: z.void(), output: GatewayConnection },
 
+  "system:runtimes": { input: z.void(), output: Runtimes },
+
   "clients:list": { input: z.void(), output: z.array(ClientState) },
   "clients:connect": { input: ClientTarget, output: ClientState },
   "clients:disconnect": { input: ClientTarget, output: ClientState },
   "clients:reveal": { input: ClientTarget.extend({ target: z.enum(["config", "backups"]) }), output: z.void() },
 
-  "activity:summary": { input: ActivityScope, output: ActivitySummary },
+  "activity:summary": { input: ActivitySummaryQuery, output: ActivitySummary },
+  "activity:series": { input: ActivityScope, output: z.array(ActivityBucket) },
   "activity:list": { input: ActivityQuery, output: z.array(ActivityEntry) }
 } as const;
 
@@ -56,18 +75,17 @@ export type IpcOutput<C extends IpcChannel> = z.output<(typeof ipc)[C]["output"]
 export const ipcEvents = {
   "servers:changed": z.void(),
   "servers:state": ServerState,
+  "servers:counts": z.array(ServerCounts),
   "servers:log": LogLine,
   "gateway:state": GatewayState,
   "clients:changed": z.void(),
-  "activity:changed": z.void()
+  "activity:changed": z.void(),
+  "updater:state": UpdateState,
+  "app:navigate": z.object({ page: AppPage, serverId: z.uuid().optional() })
 } as const;
 
 export type IpcEvent = keyof typeof ipcEvents;
 export type IpcEventPayload<E extends IpcEvent> = z.output<(typeof ipcEvents)[E]>;
-
-export const updaterChannels = { choice: "updater:choice", status: "updater:status" } as const;
-
-export type UpdateStatus = { state: "downloading"; percent: number } | { state: "installing" };
 
 export type Api = {
   invoke: <C extends IpcChannel>(
@@ -75,9 +93,4 @@ export type Api = {
     ...input: IpcInput<C> extends void ? [] : [IpcInput<C>]
   ) => Promise<IpcOutput<C>>;
   on: <E extends IpcEvent>(event: E, callback: (payload: IpcEventPayload<E>) => void) => () => void;
-};
-
-export type UpdaterApi = {
-  choose: (choice: "update" | "continue") => void;
-  onStatus: (callback: (status: UpdateStatus) => void) => void;
 };

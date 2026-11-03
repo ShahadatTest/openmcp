@@ -1,12 +1,14 @@
-import { app, autoUpdater, session, shell, type BrowserWindow } from "electron";
+import { app, autoUpdater, clipboard, nativeTheme, session, shell, type BrowserWindow } from "electron";
 
 import { getServer, listServers, pruneActivity } from "@openmcp/database";
 
 import { registerActivityHandlers } from "./activity/handlers";
+import { loadAppearance, saveAppearance } from "./appearance";
 import { registerGatewayHandlers } from "./gateway/handlers";
 import { registerCatalogHandlers } from "./catalog/handlers";
 import { registerClientHandlers } from "./clients/handlers";
 import { registerServerHandlers } from "./servers/handlers";
+import { registerSystemHandlers } from "./system/handlers";
 import { createSupervisor } from "./servers/supervisor";
 import { createGatewayServer } from "./gateway/server";
 import { createCatalog } from "./gateway/catalog";
@@ -15,9 +17,9 @@ import { connector } from "./servers/connection";
 import { createSignIn } from "./servers/signIn";
 import { launchFor } from "./servers/servers";
 import { createMainWindow } from "./windows";
-import { updateOnLaunch } from "./updater";
+import { emit, handle, onEmit } from "./ipc";
+import { createUpdater } from "./updater";
 import { openDatabase } from "./database";
-import { emit, handle } from "./ipc";
 import { createTray } from "./tray";
 
 const ALLOWED_PERMISSIONS = new Set(["clipboard-sanitized-write"]);
@@ -72,6 +74,9 @@ if (!app.requestSingleInstanceLock()) {
 
     const db = openDatabase();
     app.on("will-quit", () => db.$client.close());
+    loadAppearance(db, nativeTheme);
+    handle("app:appearance", () => nativeTheme.themeSource);
+    handle("app:setAppearance", (appearance) => saveAppearance(db, nativeTheme, appearance));
 
     const supervisor = createSupervisor({
       connect: connector(app.getVersion()),
@@ -85,7 +90,8 @@ if (!app.requestSingleInstanceLock()) {
     const catalog = createCatalog({
       supervisor,
       nameOf: (id) => getServer(db, id)?.name,
-      onChange: (kinds) => gateway.notify(kinds)
+      onChange: (kinds) => gateway.notify(kinds),
+      onCounts: (counts) => emit("servers:counts", counts)
     });
     const gateway = createGateway({
       db,
@@ -131,18 +137,53 @@ if (!app.requestSingleInstanceLock()) {
       openUrl: (url) => shell.openExternal(url),
       onChange: () => emit("servers:changed")
     });
-    registerServerHandlers(db, supervisor, oauth);
+    registerServerHandlers(db, supervisor, oauth, catalog);
     registerCatalogHandlers(db, supervisor, oauth);
     registerGatewayHandlers(gateway);
-    const clients = registerClientHandlers(gateway);
+    registerSystemHandlers();
+    const clients = registerClientHandlers(gateway, db);
     void gateway.start();
 
     getMainWindow();
-    createTray({ show: showMainWindow, quit: () => app.quit() });
+    const refreshTray = createTray({
+      show: showMainWindow,
+      quit: () => app.quit(),
+      copyUrl: () => clipboard.writeText(gateway.connection().url),
+      open: (serverId) => {
+        showMainWindow();
+        emit("app:navigate", { page: "servers", serverId });
+      },
+      act: (id, action) => void supervisor[action](id),
+      signIn: (id) => {
+        showMainWindow();
+        void oauth.signIn(id);
+      }
+    });
 
-    await updateOnLaunch();
+    const updateTray = () => {
+      const states = new Map(supervisor.states().map((state) => [state.id, state.status]));
+      refreshTray({
+        gateway: gateway.state(),
+        servers: listServers(db).map((server) => ({
+          id: server.id,
+          name: server.name,
+          status: states.get(server.id) ?? "stopped"
+        }))
+      });
+    };
+
+    onEmit((event) => {
+      if (event === "servers:changed" || event === "servers:state" || event === "gateway:state") updateTray();
+    });
+    updateTray();
+
+    const updater = createUpdater((state) => emit("updater:state", state));
+    handle("updater:state", () => updater.state());
+    handle("updater:install", () => updater.install());
+
     launched = true;
     showMainWindow();
+    updater.start();
 
     const autostart = listServers(db).filter((server) => server.autostart);
     for (const server of autostart) void supervisor.start(server.id);

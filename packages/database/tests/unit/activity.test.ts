@@ -3,6 +3,7 @@ import { beforeEach, expect, test } from "vitest";
 import {
   activity,
   createDatabase,
+  lastCallByClient,
   listActivity,
   migrationsFolder,
   pruneActivity,
@@ -223,5 +224,33 @@ test("groups a server's calls by kind and name, and scopes the totals to the sel
       p50: 42,
       p95: 42
     }
+  ]);
+});
+
+test("finds each client's latest call", () => {
+  recordActivity(db, { ...call(minutesAgo(30)), client: "claude-code" });
+  recordActivity(db, { ...call(minutesAgo(5)), client: "claude-code" });
+  recordActivity(db, { ...call(minutesAgo(10)), client: "cursor-vscode" });
+  recordActivity(db, { ...call(minutesAgo(1)), client: null });
+
+  const calls = lastCallByClient(db);
+  expect(calls).toHaveLength(2);
+  expect(calls).toEqual(
+    expect.arrayContaining([
+      { client: "claude-code", at: minutesAgo(5) },
+      { client: "cursor-vscode", at: minutesAgo(10) }
+    ])
+  );
+});
+
+test("groups calls across servers when asked", () => {
+  recordActivity(db, call(minutesAgo(5)));
+  recordActivity(db, { ...call(minutesAgo(4)), serverId: files, serverName: "files", name: "read_file" });
+  recordActivity(db, { ...call(minutesAgo(3)), serverId: files, serverName: "files", name: "read_file" });
+
+  const { groups } = summarizeActivity(db, { since, groupBy: "call" });
+  expect(groups.map((group) => [group.serverName, group.name, group.calls])).toEqual([
+    ["files", "read_file", 2],
+    ["github", "create_issue", 1]
   ]);
 });
