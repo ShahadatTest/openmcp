@@ -18,7 +18,7 @@ import { createGateway } from "./gateway/gateway";
 import { connector } from "./servers/connection";
 import { createSignIn } from "./servers/signIn";
 import { launchFor } from "./servers/servers";
-import { createMainWindow } from "./windows";
+import { createMainWindow, deferWindowChromeRecolor, syncWindowChrome } from "./windows";
 import { emit, handle, onEmit } from "./ipc";
 import { openDatabase } from "./database";
 import { createTray } from "./tray";
@@ -80,7 +80,15 @@ if (!app.requestSingleInstanceLock()) {
     app.on("will-quit", () => db.$client.close());
     loadAppearance(db, nativeTheme);
     handle("app:appearance", () => nativeTheme.themeSource);
-    handle("app:setAppearance", (appearance) => saveAppearance(db, nativeTheme, appearance));
+    handle("app:setAppearance", (appearance) => {
+      // Defer title-bar overlay recolor until the renderer calls syncWindowChrome
+      // after its view transition; otherwise controls flip ahead of the UI.
+      deferWindowChromeRecolor();
+      saveAppearance(db, nativeTheme, appearance);
+    });
+    handle("app:syncWindowChrome", () => {
+      syncWindowChrome();
+    });
 
     const supervisor = createSupervisor({
       connect: connector(app.getVersion()),

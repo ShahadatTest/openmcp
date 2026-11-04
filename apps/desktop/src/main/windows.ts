@@ -8,8 +8,32 @@ const RENDERER_DIR = join(__dirname, "../renderer");
 
 type Page = "index";
 
+/** When true, ignore the next nativeTheme "updated" recolor (user theme change). */
+let deferThemeRecolor = false;
+
 function devServerUrl() {
   return app.isPackaged ? undefined : process.env.ELECTRON_RENDERER_URL;
+}
+
+function paintWindowChrome(window: BrowserWindow) {
+  const { background, symbols } = windowColors(nativeTheme.shouldUseDarkColors);
+  window.setBackgroundColor(background);
+  if (process.platform !== "darwin") {
+    window.setTitleBarOverlay({ color: background, symbolColor: symbols, height: TOOLBAR_HEIGHT });
+  }
+}
+
+/** Skip the immediate overlay update that fires when setAppearance changes themeSource. */
+export function deferWindowChromeRecolor() {
+  deferThemeRecolor = true;
+}
+
+/** Paint title-bar overlay / background to match the current theme (end of renderer transition). */
+export function syncWindowChrome() {
+  deferThemeRecolor = false;
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) paintWindowChrome(window);
+  }
 }
 
 export function createWindow(page: Page, options: BrowserWindowConstructorOptions, query: Record<string, string> = {}) {
@@ -47,11 +71,14 @@ export function createMainWindow() {
   });
 
   const recolor = () => {
-    const { background, symbols } = windowColors(nativeTheme.shouldUseDarkColors);
-    window.setBackgroundColor(background);
-    if (process.platform !== "darwin") {
-      window.setTitleBarOverlay({ color: background, symbolColor: symbols, height: TOOLBAR_HEIGHT });
+    // User-driven appearance changes defer chrome until the renderer view
+    // transition finishes (see app:syncWindowChrome). OS theme flips still
+    // recolor immediately when appearance is "system".
+    if (deferThemeRecolor) {
+      deferThemeRecolor = false;
+      return;
     }
+    paintWindowChrome(window);
   };
   nativeTheme.on("updated", recolor);
   window.on("closed", () => nativeTheme.off("updated", recolor));

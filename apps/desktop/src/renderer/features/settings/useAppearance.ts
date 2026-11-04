@@ -36,6 +36,9 @@ export function useSetAppearance() {
       }).finished;
     } finally {
       root.classList.remove("theme-switch");
+      // Title-bar overlay updates in the main process; apply them only after
+      // the renderer transition so window controls don't flip ahead of the UI.
+      await window.api.invoke("app:syncWindowChrome");
     }
   };
 }

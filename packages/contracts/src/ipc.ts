@@ -23,6 +23,9 @@ export const ipc = {
   "app:version": { input: z.void(), output: z.string() },
   "app:appearance": { input: z.void(), output: Appearance },
   "app:setAppearance": { input: Appearance, output: z.void() },
+  // Apply title-bar / window chrome after the renderer finishes its theme transition.
+  "app:syncWindowChrome": { input: z.void(), output: z.void() },
+
 
   "updater:state": { input: z.void(), output: UpdateState },
   "updater:install": { input: z.void(), output: z.void() },
